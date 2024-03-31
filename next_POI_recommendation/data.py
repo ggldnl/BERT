@@ -108,9 +108,12 @@ class FoursquareDataset(Dataset):
             padding
         ])
 
+        attention_mask = (bert_input != self.tokenizer.pad_token_id).unsqueeze(0).unsqueeze(0).type(torch.int64)
+
         return {
             'is_next': is_next,
             'bert_input': bert_input,
+            'attention_mask': attention_mask,
             'bert_label': bert_label,
             'segment_label': segment_label,
         }
