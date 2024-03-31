@@ -2,8 +2,10 @@ from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 import pandas as pd
 import numpy as np
+import random
 import config
 import utils
+import torch
 import os
 
 
@@ -31,49 +33,78 @@ class FoursquareDataset(Dataset):
 
     def __getitem__(self, item):
 
-        poi_timestamp_sequence = self.data[item]
-        pois = [elem[0] for elem in poi_timestamp_sequence]
-        timestamps = [elem[1] for elem in poi_timestamp_sequence]
+        seq_dict = self.data[item]
 
         if self.tokenizer is None:
-            return {
-                "sequence": poi_timestamp_sequence
-            }
+            return seq_dict  # Contains poi_sequence, timestamp_sequence, is_next boolean
 
-        # Tokenize the sequences and convert them to ids
-        encoder_input = self.tokenizer.get_encoder_input(poi_sequence, self.max_seq_len, mask_percent=0.15)
-        decoder_input = self.tokenizer.get_decoder_input(poi_sequence, self.max_seq_len)
-        encoder_mask = self.tokenizer.get_encoder_mask(encoder_input)
-        decoder_mask = self.tokenizer.get_decoder_mask(decoder_input)
-        label = self.tokenizer.get_label(poi_sequence, self.max_seq_len)
+        # Convert the sequence into tokens and then into ids
+        sequence_tokens = self.tokenizer.sequence_to_tokens(seq_dict['poi_sequence'])
+        sequence_ids = self.tokenizer.tokens_to_ids(sequence_tokens)
 
-        if self.source_time_slotter is None and self.target_time_slotter is None:
-            return {
-                'encoder_input': encoder_input,
-                'decoder_input': decoder_input,
-                'encoder_mask': encoder_mask,
-                'decoder_mask': decoder_mask,
-                'label': label,
-                "sequence": poi_timestamp_sequence,
-            }
+        # Split the sequence_ids into the first sequence and the second sequence (NSP)
+        first_part = sequence_ids[:-1]
+        second_part = sequence_ids[-1:]
 
-        """
-        encoder_time_slots = self.source_time_slotter.get_slots(timestamp_sequence, self.max_seq_len)
-        decoder_time_slots = self.target_time_slotter.get_slots(timestamp_sequence, self.max_seq_len)
+        # Create the bert input
+        bert_input = (
+                [self.tokenizer.cls_token_id] +
+                first_part +
+                [self.tokenizer.sep_token_id] +
+                second_part +
+                [self.tokenizer.sep_token_id]
+        )
+
+        # Create a copy to use as label
+        bert_label = bert_input.copy()
+
+        # Create the segment label
+        segment_label = (
+            [1] * (len(first_part) + 2) +
+            [2] * (len(second_part) + 1)
+        )
+
+        # Switch to tensors
+        bert_input = torch.tensor(bert_input, dtype=torch.int64)
+        bert_label = torch.tensor(bert_label, dtype=torch.int64)
+        segment_label = torch.tensor(segment_label, dtype=torch.int64)
+        is_next = torch.tensor([seq_dict['is_next']], dtype=torch.bool)
+
+        # Apply the mask
+        mask_percent = 0.15
+        rand = torch.rand(bert_input.shape)
+        mask_arr = (
+            (rand < mask_percent) *                        # Indexes for masked tokens
+            (bert_input != self.tokenizer.cls_token_id) *  # Avoid placing a mask on the cls token
+            (bert_input != self.tokenizer.sep_token_id)    # Avoid placing a mask on the sep token
+        )
+        selection = torch.flatten(mask_arr.nonzero()).tolist()
+        bert_input[selection] = self.tokenizer.msk_token_id
+
+        # Add the padding
+        num_pad_tokens = self.max_seq_len - bert_input.shape[0]
+        pad_tokens = [self.tokenizer.pad_token_id] * num_pad_tokens
+        padding = torch.tensor(pad_tokens, dtype=torch.int64)
+
+        bert_input = torch.cat([
+            bert_input,
+            padding
+        ])
+        bert_label = torch.cat([
+            bert_label,
+            padding
+        ])
+        segment_label = torch.cat([
+            segment_label,
+            padding
+        ])
 
         return {
-            'encoder_input': encoder_input,
-            'decoder_input': decoder_input,
-            'encoder_time_slots': encoder_time_slots,
-            'decoder_time_slots': decoder_time_slots,
-            'encoder_mask': encoder_mask,
-            'decoder_mask': decoder_mask,
-            'label': label,
-            "sequence": poi_timestamp_sequence,
-            "pois": poi_sequence,
-            "timestamps": timestamp_sequence,
+            'is_next': is_next,
+            'bert_input': bert_input,
+            'bert_label': bert_label,
+            'segment_label': segment_label,
         }
-        """
 
 
 class FoursquareDataModule(pl.LightningDataModule):
@@ -253,6 +284,34 @@ class FoursquareDataModule(pl.LightningDataModule):
 
         return result_list
 
+    @staticmethod
+    def shuffle_target_pois(data, permute_probability=0.5):
+
+        # We will permute two elements for each index we generate,
+        # so we halve the permute probability
+        permute_probability = permute_probability / 2
+
+        # Select the indexes of the elements to permute
+        elements_to_permute = [i for i in range(len(data)) if random.random() < permute_probability]
+
+        for index in elements_to_permute:
+            # Select a different element to swap with
+            other_index = random.choice([i for i in range(len(data)) if i != index])
+
+            # Swap the last element of the #index sequence with the last element of the #other_index sequence
+            data[index]['poi_sequence'][-1], data[other_index]['poi_sequence'][-1] = (
+                data[other_index]['poi_sequence'][-1], data[index]['poi_sequence'][-1]
+            )
+
+            # Do the same for the timestamp
+            data[index]['timestamp_sequence'][-1], data[other_index]['timestamp_sequence'][-1] = (
+                data[other_index]['timestamp_sequence'][-1], data[index]['timestamp_sequence'][-1]
+            )
+
+            # Update the control boolean for the pair of sequences
+            data[index]['is_next'] = False
+            data[other_index]['is_next'] = False
+
     def setup(self, stage=None):
 
         # raw_data contains the entries in the input files:
@@ -289,6 +348,21 @@ class FoursquareDataModule(pl.LightningDataModule):
 
         # Split sequences that exceed max length
         data = self.split_sequences_exceeding_len(data)
+
+        # Transform the list of (poi, timestamp) sequences into a list of dictionaries;
+        # each dictionary will have:
+        # - poi sequence
+        # - timestamp sequence
+        # - boolean value that will tell us if the last poi is the true one or has been changed
+        data = [{
+            'poi_sequence': [elem[0] for elem in sequence],
+            'timestamp_sequence': [elem[1] for elem in sequence],
+            'is_next': True
+        } for sequence in data]
+
+        # Shuffle part of the data for the "next sentence prediction" task
+        # (it won't exactly be a next sentence prediction task but something similar)
+        self.shuffle_target_pois(data, 0.5)
 
         self.raw_data = data
 
@@ -349,7 +423,7 @@ if __name__ == '__main__':
     from next_POI_recommendation.tokenizer import POITokenizer
 
     # Load a tokenizer if present
-    tokenizer_path = os.path.join(config.TOK_DIR, r'tokenizer.txt')
+    tokenizer_path = os.path.join(config.TOK_DIR, r'poi_tokenizer.txt')
 
     # Check if a tokenizer backup exists
     if os.path.exists(tokenizer_path):
@@ -357,18 +431,6 @@ if __name__ == '__main__':
         tokenizer = POITokenizer.load(tokenizer_path, driver='txt')
     else:
         tokenizer = None
-
-    """
-    # Load a discretizer if present
-    discretizer_path = os.path.join(config.DISC_DIR, r'discretizer.txt')
-
-    # Check if a discretizer backup exists
-    if os.path.exists(discretizer_path):
-        print(f'Loading discretizer...')
-        discretizer = Discretizer.load(discretizer_path, driver='txt')
-    else:
-        discretizer = None
-    """
 
     datamodule = FoursquareDataModule(
         config.DATA_DIR,
@@ -383,30 +445,31 @@ if __name__ == '__main__':
     datamodule.setup()  # Setup it
 
     # Check that the size of the tensors are right
-    train_dataloader = datamodule.sequences_dataset()
+    train_dataloader = datamodule.train_dataloader()
 
     for batch in train_dataloader:
 
         if tokenizer is not None:
-            encoder_input = batch['encoder_input']
-            decoder_input = batch['decoder_input']
-            encoder_mask = batch['encoder_mask']
-            decoder_mask = batch['decoder_mask']
-            label = batch['label']
 
-            print(f'Encoder input (batch) size  : {encoder_input.shape}')
-            print(f'Decoder input (batch) size  : {decoder_input.shape}')
-            print(f'Encoder mask (batch) size   : {encoder_mask.shape}')
-            print(f'Decoder mask (batch) size   : {decoder_mask.shape}')
-            print(f'Label (batch) size          : {label.shape}')
+            # poi_sequence = batch['poi_sequence']
+            # timestamp_sequence = batch['timestamp_sequence']
+            is_next = batch['is_next']
+            bert_input = batch['bert_input']
+            bert_label = batch['bert_label']
+            segment_label = batch['segment_label']
+
+            print(f'Bert input (batch)          : {bert_input.shape}')
+            print(f'Bert label (batch)          : {bert_label.shape}')
+            print(f'Segment label (batch)       : {segment_label.shape}')
 
         else:
-            sequence = batch['sequence']
-            pois = [elem[0] for elem in sequence]
-            timestamps = [elem[1] for elem in sequence]
 
-            print(f'Sequence    : {sequence}')
-            print(f'POI list    : {pois}')
-            print(f'Timestamps  : {timestamps}')
+            poi_sequence = batch['poi_sequence']
+            timestamp_sequence = batch['timestamp_sequence']
+            is_next = batch['is_next']
+
+            print(f'POI sequence        : {poi_sequence}')
+            print(f'Timestamp sequence  : {timestamp_sequence}')
+            print(f'Is next             : {is_next}')
 
         break

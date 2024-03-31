@@ -1,33 +1,34 @@
-import random
 import pickle
-import torch
 import os
 
 
 class POITokenizer:
+    """
+    Custom tokenizer for the Next POI recommendation task.
+    """
 
     def __init__(self,
-                 unk_token='[UNK]',
                  pad_token='[PAD]',
-                 sos_token='[SOS]',
-                 eos_token='[EOS]',
+                 cls_token='[CLS]',
+                 sep_token='[SEP]',
                  msk_token='[MSK]',
+                 unk_token='[UNK]',
                  min_frequency=1
                  ):
 
-        self.unk_token = unk_token
         self.pad_token = pad_token
-        self.sos_token = sos_token
-        self.eos_token = eos_token
+        self.cls_token = cls_token
+        self.sep_token = sep_token
         self.msk_token = msk_token
+        self.unk_token = unk_token
 
         self.pad_token_id = 0
-        self.sos_token_id = 1
-        self.eos_token_id = 2
-        self.unk_token_id = 3
-        self.msk_token_id = 4
+        self.cls_token_id = 1
+        self.sep_token_id = 2
+        self.msk_token_id = 3
+        self.unk_token_id = 4
 
-        self.special_tokens = [pad_token, sos_token, eos_token, unk_token, msk_token]
+        self.special_tokens = [pad_token, cls_token, sep_token, msk_token, unk_token]
         self.special_tokens_ids = [0, 1, 2, 3, 4]
 
         self.min_frequency = min_frequency
@@ -74,129 +75,6 @@ class POITokenizer:
 
     def tokens_to_ids(self, tokens):
         return [self.poi2index[token] for token in tokens]
-
-    def get_encoder_input(self, sequence, max_seq_len=None, mask_percent=0.0, mask_last_token=False):
-        """
-        Given a sequence, produces the input for the encoder. SOS and EOS tokens
-        are added respectively to the start and the end of the sequence for the
-        encoder input. The unknown token is used in place of unrecognized tokens
-        and a padding token is added to match the max sequence length.
-        """
-
-        # Convert the sequence into tokens and then into ids
-        sequence_tokens = self.sequence_to_tokens(sequence)
-        sequence_ids = self.tokens_to_ids(sequence_tokens)
-
-        if mask_percent > 0.0:
-            mask_ids = random.sample(sequence_ids, int(len(sequence_ids) * mask_percent))
-            for index in mask_ids:
-                sequence_ids[index] = self.msk_token_id
-
-        if mask_last_token:
-            sequence_ids[-1] = self.msk_token_id
-
-        if max_seq_len is None:
-            max_seq_len = len(sequence_ids) + 2
-
-        # Number of padding tokens (max length - number of tokens in the
-        # sequence - SOS token - EOS token). If max_seq_len is not specified,
-        # it is set to the length of the list of tokens + SOS and EOS and
-        # enc_padding_tokens will be 0
-        enc_padding_tokens = max_seq_len - len(sequence_ids) - 2
-
-        encoder_input = torch.cat([
-            torch.tensor([self.sos_token_id], dtype=torch.int64),
-            torch.tensor(sequence_ids, dtype=torch.int64),
-            torch.tensor([self.eos_token_id], dtype=torch.int64),
-            torch.tensor([self.pad_token_id] * enc_padding_tokens, dtype=torch.int64)
-        ])
-
-        return encoder_input
-
-    def get_decoder_input(self, sequence, max_seq_len=None):
-        """
-        Given a sequence, produces the input for the decoder. Only the SOS is
-        added to the sequence. The unknown token is used in place of unrecognized
-        tokens and a padding token is added to match the max sequence length.
-        """
-
-        # Convert the sequence into tokens and then into input ids
-        sequence_tokens = self.sequence_to_tokens(sequence.lower())
-        sequence_ids = self.tokens_to_ids(sequence_tokens)
-
-        if max_seq_len is None:
-            max_seq_len = len(sequence_ids) + 1
-
-        # Number of padding tokens (max length - number of tokens in the
-        # sequence - SOS token). If max_seq_len is not specified, it is set
-        # to the length of the list of tokens + SOS and enc_padding_tokens
-        # will be 0
-        dec_padding_tokens = max_seq_len - len(sequence_ids) - 1
-
-        decoder_input = torch.cat([
-            torch.tensor([self.sos_token_id], dtype=torch.int64),
-            torch.tensor(sequence_ids, dtype=torch.int64),
-            torch.tensor([self.pad_token_id] * dec_padding_tokens, dtype=torch.int64)
-        ])
-
-        return decoder_input
-
-    def get_label(self, sequence, max_seq_len=None):
-        """
-        Given a sequence, produces tokenized version of the label. Only the EOS is
-        added to the sequence. The unknown token is used in place of unrecognized
-        tokens and a padding token is added to match the max sequence length.
-        """
-
-        # Convert the sequence into tokens and then into input ids
-        sequence_tokens = self.sequence_to_tokens(sequence.lower())
-        sequence_ids = self.tokens_to_ids(sequence_tokens)
-
-        if max_seq_len is None:
-            max_seq_len = len(sequence_ids) + 1
-
-        # Number of padding tokens (max length - number of tokens in the
-        # sequence - EOS token). If max_seq_len is not specified, it is set
-        # to the length of the list of tokens + EOS and enc_padding_tokens
-        # will be 0
-        lab_padding_tokens = max_seq_len - len(sequence_ids) - 1
-
-        label = torch.cat([
-            torch.tensor(sequence_ids, dtype=torch.int64),
-            torch.tensor([self.eos_token_id], dtype=torch.int64),
-            torch.tensor([self.pad_token_id] * lab_padding_tokens, dtype=torch.int64)
-        ])
-
-        return label
-
-    def get_encoder_mask(self, encoder_input):
-        return (encoder_input != self.pad_token_id).unsqueeze(0).unsqueeze(0).type(torch.int64)
-
-    @staticmethod
-    def causal_mask(size):
-        mask = torch.triu(torch.ones(1, size, size), diagonal=1).type(torch.int64)
-        return mask == 0
-
-    def get_decoder_mask(self, decoder_input):
-        return (decoder_input != self.pad_token_id).unsqueeze(0).unsqueeze(0).type(torch.int64) & self.causal_mask(decoder_input.size(0))
-
-    def encode(self, sequence):
-        """
-        Given a sequence, returns a list of token ids. The unknown token
-        is used in place of unrecognized tokens.
-        """
-
-        # Convert the sequence into tokens and then into input ids
-        sequence_tokens = self.sequence_to_tokens(sequence)
-        sequence_ids = self.tokens_to_ids(sequence_tokens)
-
-        return sequence_ids
-
-    def decode(self, token_ids):
-        """
-        Given a list of token ids, returns the respective sequence.
-        """
-        return [self.id_to_token(token_id) for token_id in token_ids]
 
     def to_pickle(self, path):
 
@@ -280,8 +158,8 @@ if __name__ == '__main__':
             config.DATA_DIR,
             config.MAX_SEQ_LEN,
             config.MIN_SEQ_LEN,
-            source_tokenizer=None,
-            target_tokenizer=None,
+            config.SEQ_LEN,
+            tokenizer=None,
             download='infer',
             random_split=False
         )
@@ -290,7 +168,7 @@ if __name__ == '__main__':
 
         # Take all the sequences and extract the pois
         sequences = datamodule.sequences_dataset()
-        pois = [elem for sequence in sequences for elem in sequence['pois']]
+        pois = [elem for sequence in sequences for elem in sequence['poi_sequence']]
 
         # Build a tokenizer from the pois
         tokenizer = POITokenizer()
