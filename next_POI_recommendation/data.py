@@ -15,6 +15,8 @@ class FoursquareDataset(Dataset):
                  data,
                  max_seq_len,
                  tokenizer=None,
+                 mask_percent=0.15,
+                 discard_non_mask_indexes=True
                  ):
         """
         The transformer is a sequence-to-sequence model used for translation
@@ -27,6 +29,8 @@ class FoursquareDataset(Dataset):
         self.data = data
         self.max_seq_len = max_seq_len
         self.tokenizer = tokenizer
+        self.mask_percent = mask_percent
+        self.discard_non_mask_indexes = discard_non_mask_indexes
 
     def __len__(self):
         return len(self.data)
@@ -71,14 +75,19 @@ class FoursquareDataset(Dataset):
         is_next = torch.tensor([seq_dict['is_next']], dtype=torch.bool)
 
         # Apply the mask
-        mask_percent = 0.15
         rand = torch.rand(bert_input.shape)
         mask_arr = (
-            (rand < mask_percent) *                        # Indexes for masked tokens
+            (rand < self.mask_percent) *                        # Indexes for masked tokens
             (bert_input != self.tokenizer.cls_token_id) *  # Avoid placing a mask on the cls token
             (bert_input != self.tokenizer.sep_token_id)    # Avoid placing a mask on the sep token
         )
         selection = torch.flatten(mask_arr.nonzero()).tolist()
+
+        # We can choose to discard or keep the indices of the non-masked tokens
+        if self.discard_non_mask_indexes:
+            bert_label = torch.zeros_like(bert_input)
+            bert_label[selection] = bert_input[selection]
+
         bert_input[selection] = self.tokenizer.msk_token_id
 
         # Add the padding
