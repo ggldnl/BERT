@@ -8,7 +8,6 @@ import os
 
 class BERTTokenizer:
     """
-
     Custom implementation of the WordPiece tokenizer. The code has been
     adapted from the one provided in the huggingface library.
     More information here:
@@ -191,44 +190,11 @@ class BERTTokenizer:
         encoded_words = [self.encode_word(word) for word in pre_tokenize_sentence]
         return sum(encoded_words, [])
 
+    def token_to_id(self, token):
+        return self.token2index[token] if token in self.token2index else self.unk_token_id
+
     def get_vocab_size(self):
         return self.vocab_size
-
-    def get_encoder_input(self, sentence, max_seq_len=None, mask_percent=0.0, mask_last_token=False):
-        """
-        A tokenized BERT input always starts with a special [CLS] token and ends with a
-        special [SEP] token
-        """
-
-        # Convert the sentence into tokens and then into ids
-        sentence_tokens = self.tokenize(sentence)
-        sentence_ids = [self.token2index[token] for token in sentence_tokens]
-
-        if mask_percent > 0.0:
-            mask_ids = random.sample(sentence_ids, int(len(sentence_ids) * mask_percent))
-            for index in mask_ids:
-                sentence_ids[index] = self.msk_token_id
-
-        if mask_last_token:
-            sentence_ids[-1] = self.msk_token_id
-
-        if max_seq_len is None:
-            max_seq_len = len(sentence_ids) + 2
-
-        # Number of padding tokens (max length - number of tokens in the
-        # sentence - SOS token - EOS token). If max_seq_len is not specified,
-        # it is set to the length of the list of tokens + SOS and EOS and
-        # enc_padding_tokens will be 0
-        enc_padding_tokens = max_seq_len - len(sentence_ids) - 2
-
-        encoder_input = torch.cat([
-            torch.tensor([self.cls_token_id], dtype=torch.int64),
-            torch.tensor(sentence_ids, dtype=torch.int64),
-            torch.tensor([self.sep_token_id], dtype=torch.int64),
-            torch.tensor([self.pad_token_id] * enc_padding_tokens, dtype=torch.int64)
-        ])
-
-        return encoder_input
 
     def to_pickle(self, path):
 
@@ -304,7 +270,7 @@ class BERTTokenizer:
 if __name__ == '__main__':
 
     import config
-    tokenizer_path = os.path.join(config.TOK_DIR, r'bert_tokenizer.txt')
+    tokenizer_path = os.path.join(config.TOK_DIR, r'bert_tokenizer_example.txt')
 
     corpus = [
         "This is the Hugging Face Course.",

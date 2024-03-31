@@ -3,7 +3,7 @@ import torch
 import math
 
 
-class PositionalEncoding(nn.Module):
+class PositionalEmbeddings(nn.Module):
     # Each sequence is mapped to a list of vectors by the embedding layer.
     # We need to convey to the model information on the position of each
     # token inside the sequence. To do so, to each token we sum another
@@ -40,13 +40,13 @@ class PositionalEncoding(nn.Module):
         # to small changes (it's conditioning is bad -> ill-conditioned) then a small
         # change in the input may result in a large change in the output.
 
-        # Create a positional encoding matrix of shape (seq_len, d_model) filled with zeros
+        # Create a positional embedding matrix of shape (seq_len, d_model) filled with zeros
         pe = torch.zeros(seq_len, d_model)
 
         # Create a tensor representing positions (0 to seq_len -1)
         position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)
 
-        # Division term for the positional encoding formula
+        # Division term for the positional embedding formula
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
 
         # Apply sin to even positions
@@ -64,6 +64,8 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        # Adding positional encoding to the input tensor X
-        x = x + (self.pe[:, :x.shape[1], :].requires_grad_(False))
-        return self.dropout(x)  # Dropout for regularization
+        # Adding positional embedding to the input tensor X
+        # x = x + (self.pe[:, :x.shape[1], :].requires_grad_(False))
+        # return self.dropout(x)  # Dropout for regularization
+
+        return self.pe

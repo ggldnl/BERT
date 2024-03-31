@@ -72,7 +72,7 @@ class FoursquareDataset(Dataset):
         bert_input = torch.tensor(bert_input, dtype=torch.int64)
         bert_label = torch.tensor(bert_label, dtype=torch.int64)
         segment_label = torch.tensor(segment_label, dtype=torch.int64)
-        is_next = torch.tensor([seq_dict['is_next']], dtype=torch.bool)
+        is_next = torch.tensor([seq_dict['is_next']], dtype=torch.int64)
 
         # Apply the mask
         rand = torch.rand(bert_input.shape)
@@ -200,7 +200,7 @@ class FoursquareDataModule(pl.LightningDataModule):
             os.remove(zip_path)
             print(f'Done.')
         else:
-            print(f'resource already downloaded.\nDone.')
+            print(f'Resource already downloaded.')
 
     def train_test_val_split(self, data, train_percent, val_percent):
 
