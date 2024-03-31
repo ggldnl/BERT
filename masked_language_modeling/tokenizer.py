@@ -201,8 +201,8 @@ class BERTTokenizer:
         """
 
         # Convert the sentence into tokens and then into ids
-        sentence_tokens = self.sentence_to_tokens(sentence)
-        sentence_ids = self.tokens_to_ids(sentence_tokens)
+        sentence_tokens = self.tokenize(sentence)
+        sentence_ids = [self.token2index[token] for token in sentence_tokens]
 
         if mask_percent > 0.0:
             mask_ids = random.sample(sentence_ids, int(len(sentence_ids) * mask_percent))
@@ -219,12 +219,12 @@ class BERTTokenizer:
         # sentence - SOS token - EOS token). If max_seq_len is not specified,
         # it is set to the length of the list of tokens + SOS and EOS and
         # enc_padding_tokens will be 0
-        enc_padding_tokens = max_seq_len - len(sequence_ids) - 2
+        enc_padding_tokens = max_seq_len - len(sentence_ids) - 2
 
         encoder_input = torch.cat([
-            torch.tensor([self.sos_token_id], dtype=torch.int64),
-            torch.tensor(sequence_ids, dtype=torch.int64),
-            torch.tensor([self.eos_token_id], dtype=torch.int64),
+            torch.tensor([self.cls_token_id], dtype=torch.int64),
+            torch.tensor(sentence_ids, dtype=torch.int64),
+            torch.tensor([self.sep_token_id], dtype=torch.int64),
             torch.tensor([self.pad_token_id] * enc_padding_tokens, dtype=torch.int64)
         ])
 
